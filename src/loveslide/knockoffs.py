@@ -78,12 +78,13 @@ class Knockoffs():
     @staticmethod 
     def filter_knockoffs_iterative(z, y, fdr=0.1, niter=1, spec=0.2, n_workers=1):
         '''
-        @return: mask of 0,1 significant interaction terms where 1 is significant
+        @return: indices of significant variables matching R's findOptIter logic
         '''
         import rpy2.robjects as robjects
         from rpy2.robjects import pandas2ri
         from rpy2.robjects.packages import importr
-        
+        import warnings
+
         # Convert numpy arrays to R objects
         pandas2ri.activate()
         z_r = pandas2ri.py2rpy(pd.DataFrame(z))
@@ -92,26 +93,79 @@ class Knockoffs():
         # Import R packages
         knockoff = importr('knockoff')
         
-        results = []
+        # Calculate mu and Sigma
+        z_mat = np.array(z)
+        mu = np.mean(z_mat, axis=0)
+        Sigma = np.cov(z_mat, rowvar=False)
+
+        # Ensure Sigma is 2D
+        if Sigma.ndim == 0:
+            Sigma = np.array([[Sigma]])
+
+        mu_r = robjects.FloatVector(mu)
+        Sigma_r = robjects.r.matrix(robjects.FloatVector(Sigma.flatten()), nrow=z_mat.shape[1], ncol=z_mat.shape[1])
+        
+        # ASDP caching logic
+        try:
+            diag_s = knockoff.create_solve_asdp(Sigma_r)
+        except Exception as e:
+            warnings.warn(f"ASDP solver failed, falling back to equi method: {e}")
+            diag_s = knockoff.create_solve_equi(Sigma_r)
+        
+        # Create a closure in R that uses the pre-computed diag_s
+        robjects.globalenv['mu_r'] = mu_r
+        robjects.globalenv['Sigma_r'] = Sigma_r
+        robjects.globalenv['diag_s'] = diag_s
+        
+        r_func_str = """
+        function(X) {
+            knockoff::create.gaussian(X, mu_r, Sigma_r, diag_s = diag_s)
+        }
+        """
+        create_knockoffs_cached = robjects.r(r_func_str)
+        
+        results_list = []
         for _ in range(niter):
             result = knockoff.knockoff_filter(
                 X=z_r,
                 y=y_r,
-                knockoffs=knockoff.create_second_order,
+                knockoffs=create_knockoffs_cached,
                 statistic=knockoff.stat_glmnet_lambdasmax,
                 offset=0,
                 fdr=fdr
             )
             selected = result.rx2('selected')
-            results.append(pandas2ri.rpy2py(selected))
+            selected_py = pandas2ri.rpy2py(selected)
+            if selected_py is not None and len(selected_py) > 0:
+                results_list.append(np.array(selected_py) - 1) # Convert to 0-based indexing
+            else:
+                results_list.append(np.array([], dtype=int))
 
-        results = np.concatenate(results, axis=0)
-        results = results - 1 # Convert to 0-based indexing
+        # Replicate R's findOptIter logic
+        # 1. Find frequent variables
+        all_selected = np.concatenate(results_list) if sum(len(x) for x in results_list) > 0 else np.array([], dtype=int)
+        if len(all_selected) == 0:
+            return np.array([], dtype=int)
+            
+        idx, counts = np.unique(all_selected, return_counts=True)
+        freq_vars = idx[np.where(counts >= spec * niter)]
+        
+        if len(freq_vars) == 0:
+            return np.array([], dtype=int)
+            
+        # 2. Find iterations with max overlap with frequent variables
+        overlaps = np.array([np.sum(np.isin(x, freq_vars)) for x in results_list])
+        mm = np.max(overlaps)
+        max_overlap_ind = np.where(overlaps == mm)[0]
+        
+        # 3. Find the shortest iteration among those
+        overlap_list_len = np.array([len(results_list[i]) for i in max_overlap_ind])
+        selected_run = max_overlap_ind[np.argmin(overlap_list_len)]
+        
+        selected_vars = results_list[selected_run].astype(int)
 
-        idx, counts = np.unique(results, return_counts=True)
-        sig_idxs = idx[np.where(counts >= spec * niter)]
-
-        return sig_idxs
+        pandas2ri.deactivate()
+        return selected_vars
     
     def fit_linear(self, z_matrix, y):
         '''fit z-matrix in linear part to get LP'''

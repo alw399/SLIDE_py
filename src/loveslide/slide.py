@@ -305,43 +305,51 @@ class OptimizeSLIDE(SLIDE):
         return machop
     
     def find_interaction_LFs(self, machop, spec, fdr, niter, f_size, n_workers=1):
-
-        machop.add_z1(marginal_idxs=self.marginal_idxs)
-
-        if machop.z2.shape[1] == 0:
-            print('All LFs are standalone, consider lowering delta for LOVE to find more LFs')
+        if len(self.marginal_idxs) == 0:
             self.interaction_pairs = np.array([])
             self.interaction_terms = np.array([])
             return
 
-        # Flatten interaction terms for knockoff selection
-        interaction_terms = machop.interaction_terms.reshape(machop.n, -1)
+        all_sig_interactions = []
+        all_sig_pairs = []
+        used_margs = set()
 
-        # Get significant interactions from flattened array
-        sig_interactions = machop.select_short_freq(
-            z = interaction_terms,
-            y = self.data.Y.values,
-            spec = spec,
-            fdr = fdr,
-            niter = niter,
-            f_size = f_size,
-            n_workers = n_workers
-        )
+        z = self.latent_factors.values
+        y = self.data.Y.values
 
-        if len(sig_interactions) == 0:
+        for marg in self.marginal_idxs:
+            used_margs.add(marg)
+            interact_cols = [i for i in range(z.shape[1]) if i not in used_margs]
+            
+            if not interact_cols:
+                continue
+
+            # Compute interaction terms for this marginal
+            z_interact = z[:, interact_cols] * z[:, [marg]]
+            
+            # Run knockoffs on these interactions
+            sig_idx_subset = Knockoffs.select_short_freq(
+                z=z_interact,
+                y=y,
+                spec=spec,
+                fdr=fdr,
+                niter=niter,
+                f_size=f_size,
+                n_workers=n_workers
+            )
+            
+            if len(sig_idx_subset) > 0:
+                for idx in sig_idx_subset:
+                    all_sig_pairs.append((marg, interact_cols[idx]))
+                    all_sig_interactions.append(z_interact[:, idx])
+                    
+        if not all_sig_pairs:
             self.interaction_pairs = np.array([])
             self.interaction_terms = np.array([])
         else:
-            n_candidates = machop.z2.shape[1]
-            marginal_lf = self.marginal_idxs[sig_interactions // n_candidates]
-            z2_cols = np.array([i for i in range(self.latent_factors.shape[1]) if i not in self.marginal_idxs])
+            self.interaction_pairs = np.array(all_sig_pairs).T
+            self.interaction_terms = np.column_stack(all_sig_interactions)
 
-            assert len(z2_cols) == n_candidates, "Number of candidates does not match (implementation error)"
-
-            interacting_lf = z2_cols[sig_interactions % n_candidates] 
-            self.interaction_pairs = np.array([marginal_lf, interacting_lf])
-            self.interaction_terms = interaction_terms[:, sig_interactions]
-    
 
     def run_SLIDE(self, latent_factors, niter, spec, fdr, verbose=False, n_workers=1, outpath='.', do_interacts=True):
         
