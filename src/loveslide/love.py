@@ -94,7 +94,7 @@ def call_love(X, lbd=0.5, mu=0.5, est_non_pure_row="HT", thresh_fdr=0.2, verbose
                   lbd=r_lbd, 
                   thresh_fdr=r_thresh_fdr,
                   rep_cv=r_rep_CV,
-                  out_path=outpath,
+                  out_path=robjects.NULL, # Skip R plots to avoid font crashes on headless servers
                   verbose=r_verbose
                   )
     else:
