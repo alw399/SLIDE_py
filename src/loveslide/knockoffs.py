@@ -90,79 +90,59 @@ class Knockoffs():
         z_r = pandas2ri.py2rpy(pd.DataFrame(z))
         y_r = pandas2ri.py2rpy(pd.Series(y.flatten()))
         
-        # Import R packages
-        knockoff = importr('knockoff')
-        
-        # Calculate mu and Sigma
-        z_mat = np.array(z)
-        mu = np.mean(z_mat, axis=0)
-        Sigma = np.cov(z_mat, rowvar=False)
+        # Evaluate full R secondKO function to perfectly replicate R's findOptIter and shrinkage logic
+        r_secondKO_str = """
+        function(z, y, niter, fdr, spec) {
+            z_mat <- as.matrix(z)
+            mu <- colMeans(z_mat)
+            Sigma <- cov(z_mat)
 
-        # Ensure Sigma is 2D
-        if Sigma.ndim == 0:
-            Sigma = np.array([[Sigma]])
-
-        mu_r = robjects.FloatVector(mu)
-        Sigma_r = robjects.r.matrix(robjects.FloatVector(Sigma.flatten()), nrow=z_mat.shape[1], ncol=z_mat.shape[1])
-        
-        # ASDP caching logic
-        try:
-            diag_s = knockoff.create_solve_asdp(Sigma_r)
-        except Exception as e:
-            warnings.warn(f"ASDP solver failed, falling back to equi method: {e}")
-            diag_s = knockoff.create_solve_equi(Sigma_r)
-        
-        # Create a closure in R that uses the pre-computed diag_s
-        robjects.globalenv['mu_r'] = mu_r
-        robjects.globalenv['Sigma_r'] = Sigma_r
-        robjects.globalenv['diag_s'] = diag_s
-        
-        r_func_str = """
-        function(X) {
-            knockoff::create.gaussian(X, mu_r, Sigma_r, diag_s = diag_s)
+            if (!knockoff:::is_posdef(Sigma)) {
+                if (requireNamespace("corpcor", quietly = TRUE)) {
+                    Sigma <- matrix(as.numeric(corpcor::cov.shrink(z_mat, verbose = FALSE)), nrow = ncol(z_mat))
+                }
+            }
+            diag_s <- tryCatch(knockoff::create.solve_asdp(Sigma), error = function(e) knockoff::create.solve_equi(Sigma))
+            
+            create_knockoffs_cached <- function(X) {
+                knockoff::create.gaussian(X, mu, Sigma, diag_s = diag_s)
+            }
+            
+            results_list <- lapply(1:niter, function(i) {
+                res <- knockoff::knockoff.filter(X = z_mat, y = as.matrix(y),
+                                                 knockoffs = create_knockoffs_cached,
+                                                 statistic = knockoff::stat.glmnet_lambdasmax,
+                                                 offset = 0, fdr = fdr)
+                as.numeric(names(res$selected))
+            })
+            
+            # R logic for findOptIter
+            all_selected <- unlist(results_list)
+            if (length(all_selected) == 0) return(numeric(0))
+            
+            counts <- table(all_selected)
+            freq_vars <- as.numeric(names(counts[counts >= spec * niter]))
+            if (length(freq_vars) == 0) return(numeric(0))
+            
+            overlaps <- sapply(results_list, function(x) sum(x %in% freq_vars))
+            mm <- max(overlaps)
+            max_overlap_ind <- which(overlaps == mm)
+            
+            overlap_list_len <- sapply(max_overlap_ind, function(i) length(results_list[[i]]))
+            selected_run <- max_overlap_ind[which.min(overlap_list_len)]
+            
+            return(results_list[[selected_run]])
         }
         """
-        create_knockoffs_cached = robjects.r(r_func_str)
+        import rpy2.robjects as robjects
+        r_secondKO = robjects.r(r_secondKO_str)
         
-        results_list = []
-        for _ in range(niter):
-            result = knockoff.knockoff_filter(
-                X=z_r,
-                y=y_r,
-                knockoffs=create_knockoffs_cached,
-                statistic=knockoff.stat_glmnet_lambdasmax,
-                offset=0,
-                fdr=fdr
-            )
-            selected = result.rx2('selected')
-            selected_py = pandas2ri.rpy2py(selected)
-            if selected_py is not None and len(selected_py) > 0:
-                results_list.append(np.array(selected_py) - 1) # Convert to 0-based indexing
-            else:
-                results_list.append(np.array([], dtype=int))
-
-        # Replicate R's findOptIter logic
-        # 1. Find frequent variables
-        all_selected = np.concatenate(results_list) if sum(len(x) for x in results_list) > 0 else np.array([], dtype=int)
-        if len(all_selected) == 0:
-            return np.array([], dtype=int)
-            
-        idx, counts = np.unique(all_selected, return_counts=True)
-        freq_vars = idx[np.where(counts >= spec * niter)]
+        selected_vars_r = r_secondKO(z_r, y_r, niter, fdr, spec)
         
-        if len(freq_vars) == 0:
-            return np.array([], dtype=int)
-            
-        # 2. Find iterations with max overlap with frequent variables
-        overlaps = np.array([np.sum(np.isin(x, freq_vars)) for x in results_list])
-        mm = np.max(overlaps)
-        max_overlap_ind = np.where(overlaps == mm)[0]
-        
-        # 3. Find the shortest iteration among those
-        overlap_list_len = np.array([len(results_list[i]) for i in max_overlap_ind])
-        selected_run = max_overlap_ind[np.argmin(overlap_list_len)]
-        
-        selected_vars = results_list[selected_run].astype(int)
+        if len(selected_vars_r) == 0:
+            selected_vars = np.array([], dtype=int)
+        else:
+            selected_vars = np.array(selected_vars_r, dtype=int) - 1 # R is 1-based, Python is 0-based
 
         pandas2ri.deactivate()
         return selected_vars
