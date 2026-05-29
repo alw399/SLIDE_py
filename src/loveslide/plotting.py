@@ -146,6 +146,8 @@ class Plotter:
         
         # Plot density for s1_random and s2_random with filled area
         for score_type, color in [('full_random', 'blue'), ('partial_random', 'green'), ('s3', 'red')]:
+            if score_type not in scores or len(scores[score_type]) == 0:
+                continue
             if len(set(scores[score_type])) == 1:  # If all values are the same
                 ax.axvline(x=scores[score_type][0], color=color, label=f'{score_type}', linewidth=2)
             else:

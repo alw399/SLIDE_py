@@ -137,18 +137,22 @@ class SLIDE:
             full_random = 'NA'
         else:
             true_scores = np.mean([x for x in scores['s3'] if x is not None])
-            partial_random = np.mean([x for x in scores['partial_random'] if x is not None])
+            if len(scores.get('partial_random', [])) > 0:
+                partial_random = np.mean([x for x in scores['partial_random'] if x is not None])
+            else:
+                partial_random = 'NA'
             full_random = np.mean([x for x in scores['full_random'] if x is not None])
 
         with open(os.path.join(outpath, 'scores.txt'), 'w') as f:
             
-            f.write(f"Run completed: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write("\n#########################\n\n")
+            f.write(f"Run completed: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\\n")
+            f.write("\\n#########################\\n\\n")
 
-            f.write(f"True Scores: {true_scores}\n")
-            f.write(f"Partial Random: {partial_random}\n")
-            f.write(f"Full Random: {full_random}\n")
-            f.write("\n#########################\n\n")
+            f.write(f"True Scores: {true_scores}\\n")
+            if partial_random != 'NA':
+                f.write(f"Partial Random: {partial_random}\\n")
+            f.write(f"Full Random: {full_random}\\n")
+            f.write("\\n#########################\\n\\n")
 
             f.write(f"Number of latent factors: {self.latent_factors.shape[1]}\n")
             f.write(f"Number of marginals: {len(self.sig_LFs)}\n")

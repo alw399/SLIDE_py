@@ -141,23 +141,25 @@ class SLIDE_Estimator(Estimator):
             )
 
             # Calculate scores for partial random selection
-            s2_real = Knockoffs.get_interaction_terms(
-                s1,
-                latent_factors_z2.loc[:, np.random.choice(
-                    non_interaction_terms,
-                    size=n_interactions,
-                    replace=False
-                )]
-            ).reshape(n, -1)
+            if n_interactions > 0:
+                s2_real = Knockoffs.get_interaction_terms(
+                    s1,
+                    latent_factors_z2.loc[:, np.random.choice(
+                        non_interaction_terms,
+                        size=n_interactions,
+                        replace=False
+                    )]
+                ).reshape(n, -1)
 
-            s3_partial = (np.concatenate([s1, s2_real], axis=1) 
-                        if len(s2_real) > 0 else s1)
-            
-            scores['partial_random'].append(
-                Estimator.get_aucs(s3_partial, y, 1, test_size, scaler)
-            )
+                s3_partial = (np.concatenate([s1, s2_real], axis=1) 
+                            if len(s2_real) > 0 else s1)
+                
+                scores['partial_random'].append(
+                    Estimator.get_aucs(s3_partial, y, 1, test_size, scaler)
+                )
 
-        scores['partial_random'] = np.array(scores['partial_random']).flatten()
+        if n_interactions > 0:
+            scores['partial_random'] = np.array(scores['partial_random']).flatten()
         scores['full_random'] = np.array(scores['full_random']).flatten()
 
         return scores
