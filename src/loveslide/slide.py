@@ -287,7 +287,7 @@ class OptimizeSLIDE(SLIDE):
         )
         return Z
     
-    def find_standalone_LFs(self, latent_factors, spec, fdr, niter, f_size, n_workers=1):
+    def find_standalone_LFs(self, latent_factors, spec, fdr, niter, f_size):
 
         machop = Knockoffs(y = self.data.Y.values, z2 = latent_factors.values)
 
@@ -297,14 +297,13 @@ class OptimizeSLIDE(SLIDE):
             spec = spec, 
             fdr = fdr, 
             niter = niter, 
-            f_size = f_size,
-            n_workers = n_workers
+            f_size = f_size
         )
 
         self.marginal_idxs = marginal_idxs
         return machop
     
-    def find_interaction_LFs(self, machop, spec, fdr, niter, f_size, n_workers=1):
+    def find_interaction_LFs(self, machop, spec, fdr, niter, f_size):
         if len(self.marginal_idxs) == 0:
             self.interaction_pairs = np.array([])
             self.interaction_terms = np.array([])
@@ -334,8 +333,7 @@ class OptimizeSLIDE(SLIDE):
                 spec=spec,
                 fdr=fdr,
                 niter=niter,
-                f_size=f_size,
-                n_workers=n_workers
+                f_size=f_size
             )
             
             if len(sig_idx_subset) > 0:
@@ -351,7 +349,7 @@ class OptimizeSLIDE(SLIDE):
             self.interaction_terms = np.column_stack(all_sig_interactions)
 
 
-    def run_SLIDE(self, latent_factors, niter, spec, fdr, verbose=False, n_workers=1, outpath='.', do_interacts=True):
+    def run_SLIDE(self, latent_factors, niter, spec, fdr, verbose=False, outpath='.', do_interacts=True):
         
         f_size = self.calc_default_fsize(latent_factors.shape[1])
 
@@ -360,7 +358,7 @@ class OptimizeSLIDE(SLIDE):
             print(f'Finding standalone LF...')
 
         ### Find standalone LFs
-        machop = self.find_standalone_LFs(latent_factors, spec, fdr, niter, f_size, n_workers)
+        machop = self.find_standalone_LFs(latent_factors, spec, fdr, niter, f_size)
 
         if len(self.marginal_idxs) == 0:
             print("No standalone LF found")
@@ -381,7 +379,7 @@ class OptimizeSLIDE(SLIDE):
             if verbose:
                 print(f'Finding interacting LF...')
 
-            self.find_interaction_LFs(machop, spec, fdr, niter, f_size, n_workers)
+            self.find_interaction_LFs(machop, spec, fdr, niter, f_size)
 
             if verbose:
                 print(f'Found {len(self.interaction_pairs)} interacting LF')
@@ -393,7 +391,8 @@ class OptimizeSLIDE(SLIDE):
 
             self.sig_interacts = []
 
-    def run_pipeline(self, verbose=True, n_workers=1, rerun=False):
+    def run_pipeline(self, verbose=True, rerun=False):
+        """Run SLIDE with serial knockoff iterations."""
         
         if verbose:
             self.show_params()
@@ -453,7 +452,6 @@ class OptimizeSLIDE(SLIDE):
                     niter=self.input_params['niter'], 
                     spec=self.input_params['spec'], 
                     fdr=self.input_params['fdr'],
-                    n_workers=self.input_params['n_workers'],
                     verbose=verbose,
                     outpath=out_iter,
                     do_interacts=self.input_params['do_interacts']

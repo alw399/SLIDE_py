@@ -83,8 +83,12 @@ input_params = {
 }
 
 slider = OptimizeSLIDE(input_params)
-slider.run_pipeline(verbose=True, n_workers=1)
+slider.run_pipeline(verbose=True)
 ```
+
+Knockoff iterations run serially. Parallel execution was removed because
+it did not reproduce serial selections under the same R seed. Remove
+`n_workers` from method calls and `input_params`; it is no longer supported.
 
 ---
 
@@ -119,7 +123,7 @@ The `run_pipeline()` method follows three key stages:
 | `thresh_fdr`      | float | FDR threshold in LOVE                | 0.1             |
 | `spec`            | float | Minimum reproducibility for a factor | 0.2             |
 | `y_factor`        | bool  | Treat `y` as categorical             | True            |
-| `niter`           | int   | Iterations for LOVE                  | 500             |
+| `niter`           | int   | Knockoff iterations per batch        | 500             |
 | `SLIDE_top_feats` | int   | Number of top features to plot       | 20              |
 | `rep_CV`          | int   | Repeats for cross-validation         | 50              |
 | `pure_homo`       | bool  | Use pure variables with loadings = 1 | True            |

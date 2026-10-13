@@ -16,6 +16,9 @@ def init_data(input_params, x=None, y=None):
         input_params (dict): Dictionary containing input parameters with default values.
     """
 
+    if 'n_workers' in input_params:
+        raise ValueError('n_workers is no longer supported; knockoffs run serially. Remove it from input_params.')
+
     data = EasyDict()
     input_params = defaultdict(lambda: None, input_params)
 
@@ -54,9 +57,6 @@ def init_data(input_params, x=None, y=None):
 
     if input_params['out_path'] is None:
         input_params['out_path'] = os.getcwd()
-    
-    if input_params['n_workers'] is None:
-        input_params['n_workers'] = 1
     
     if input_params['do_interacts'] is None:
         input_params['do_interacts'] = True
@@ -143,8 +143,3 @@ def calc_default_fsize(n_rows, K):
         f_size = n_rows
         
     return f_size
-
-
-
-
-    

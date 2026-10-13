@@ -1,12 +1,8 @@
 import numpy as np 
 import pandas as pd 
 import os, pickle
-from concurrent.futures import ProcessPoolExecutor
 import math
-from pqdm.processes import pqdm
-from functools import partial
 from tqdm import tqdm
-import copy
 
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.linear_model import LinearRegression, Lasso
@@ -76,19 +72,20 @@ class Knockoffs():
         return np.einsum('ij,ik->ijk', z_matrix, plm_embedding)
 
     @staticmethod 
-    def filter_knockoffs_iterative(z, y, fdr=0.1, niter=1, spec=0.2, n_workers=1):
+    def filter_knockoffs_iterative(z, y, fdr=0.1, niter=1, spec=0.2):
         '''
-        @return: indices of significant variables matching R's findOptIter logic
+        Return selected indices using serial knockoff iterations.
         '''
+        if isinstance(niter, (bool, np.bool_)) or not isinstance(niter, (int, np.integer)) or niter < 1:
+            raise ValueError('niter must be a positive integer')
+
         import rpy2.robjects as robjects
         from rpy2.robjects import pandas2ri
-        from rpy2.robjects.packages import importr
-        import warnings
 
         # Convert numpy arrays to R objects
-        pandas2ri.activate()
-        z_r = pandas2ri.py2rpy(pd.DataFrame(z))
-        y_r = pandas2ri.py2rpy(pd.Series(y.flatten()))
+        with (robjects.default_converter + pandas2ri.converter).context():
+            z_r = robjects.conversion.py2rpy(pd.DataFrame(z))
+            y_r = robjects.conversion.py2rpy(pd.Series(np.asarray(y).flatten()))
         
         # Evaluate full R secondKO function to perfectly replicate R's findOptIter and shrinkage logic
         r_secondKO_str = """
@@ -104,17 +101,20 @@ class Knockoffs():
             }
             diag_s <- tryCatch(knockoff::create.solve_asdp(Sigma), error = function(e) knockoff::create.solve_equi(Sigma))
             
-            create_knockoffs_cached <- function(X) {
-                knockoff::create.gaussian(X, mu, Sigma, diag_s = diag_s)
-            }
-            
-            results_list <- lapply(1:niter, function(i) {
+            run_iteration <- function(i, z_mat, y, mu, Sigma, diag_s, fdr) {
+                create_knockoffs_cached <- function(X) {
+                    knockoff::create.gaussian(X, mu, Sigma, diag_s = diag_s)
+                }
                 res <- knockoff::knockoff.filter(X = z_mat, y = as.matrix(y),
                                                  knockoffs = create_knockoffs_cached,
                                                  statistic = knockoff::stat.glmnet_lambdasmax,
                                                  offset = 0, fdr = fdr)
-                as.numeric(names(res$selected))
-            })
+                as.numeric(res$selected)
+            }
+            environment(run_iteration) <- baseenv()
+            results_list <- lapply(
+                seq_len(niter), run_iteration,
+                z_mat = z_mat, y = y, mu = mu, Sigma = Sigma, diag_s = diag_s, fdr = fdr)
             
             # R logic for findOptIter
             all_selected <- unlist(results_list)
@@ -134,17 +134,15 @@ class Knockoffs():
             return(results_list[[selected_run]])
         }
         """
-        import rpy2.robjects as robjects
         r_secondKO = robjects.r(r_secondKO_str)
         
-        selected_vars_r = r_secondKO(z_r, y_r, niter, fdr, spec)
+        selected_vars_r = r_secondKO(z_r, y_r, int(niter), fdr, spec)
         
         if len(selected_vars_r) == 0:
             selected_vars = np.array([], dtype=int)
         else:
             selected_vars = np.array(selected_vars_r, dtype=int) - 1 # R is 1-based, Python is 0-based
 
-        pandas2ri.deactivate()
         return selected_vars
     
     def fit_linear(self, z_matrix, y):
@@ -158,7 +156,7 @@ class Knockoffs():
 
 
     @staticmethod
-    def select_short_freq(z, y, spec=0.3, fdr=0.1, niter=1000, f_size=100, n_workers=1):
+    def select_short_freq(z, y, spec=0.3, fdr=0.1, niter=1000, f_size=100):
         """
         Find significant variables using second order knockoffs across subsets of features.
 
@@ -172,14 +170,10 @@ class Knockoffs():
             Proportion threshold to consider a variable frequently selected
         fdr : float
             Target false discovery rate
-        elbow : bool
-            Whether to use elbow method to select frequent variables
         niter : int
             Number of knockoff iterations
         f_size : int
             Target size for each feature subset
-        parallel : bool
-            Whether to run iterations in parallel
 
         Returns:
 
@@ -212,7 +206,7 @@ class Knockoffs():
             subset_z = z[:, start:stop]
 
             # Run knockoffs on this subset
-            selected_indices = Knockoffs.filter_knockoffs_iterative(subset_z, y, fdr=fdr, niter=niter, spec=spec, n_workers=n_workers)
+            selected_indices = Knockoffs.filter_knockoffs_iterative(subset_z, y, fdr=fdr, niter=niter, spec=spec)
         
             # Adjust indices to account for subset
             selected_indices = selected_indices + start
@@ -226,7 +220,7 @@ class Knockoffs():
 
         if n_splits > 1 and len(screen_var) > 1:
             subset_z = z[:, screen_var]
-            final_var = Knockoffs.filter_knockoffs_iterative(subset_z, y, fdr=fdr, niter=niter, spec=spec, n_workers=n_workers)
+            final_var = Knockoffs.filter_knockoffs_iterative(subset_z, y, fdr=fdr, niter=niter, spec=spec)
             final_var = screen_var[final_var] # index the candidate indices to get the final significant indices
         else:
             final_var = screen_var
